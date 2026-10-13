@@ -134,7 +134,8 @@
         'vinte': 20, 'trinta': 30, 'quarenta': 40, 'cinquenta': 50,
         'sessenta': 60, 'setenta': 70, 'oitenta': 80, 'noventa': 90,
         'cem': 100, 'cento': 100, 'duzentos': 200, 'trezentos': 300,
-        'quatrocentos': 400, 'quinhentos': 500, 'seiscentos': 600
+        'quatrocentos': 400, 'quinhentos': 500, 'seiscentos': 600,
+        'meia': 6
       };
       var digits = text.match(/\d+/g);
       if (digits && digits.length > 0) {
@@ -144,7 +145,7 @@
       var total = 0;
       var found = false;
       for (var i = 0; i < tokens.length; i++) {
-        var w = tokens[i].replace(/ç/g, 'c').replace(/ã/g, 'a').replace(/õ/g, 'o').replace(/ê/g, 'e').replace(/é/g, 'e');
+        var w = tokens[i].replace(/ç/g, 'c').replace(/ã/g, 'a').replace(/õ/g, 'o').replace(/ê/g, 'e').replace(/é/g, 'e').replace(/á/g, 'a').replace(/í/g, 'i').replace(/ó/g, 'o').replace(/ú/g, 'u');
         if (words[w] !== undefined) {
           total += words[w];
           found = true;
@@ -158,8 +159,9 @@
     if (SpeechRecognition && voiceBtn) {
       recognition = new SpeechRecognition();
       recognition.lang = 'pt-BR';
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 3;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 5;
 
       voiceBtn.addEventListener('click', function() {
         if (isListening) {
@@ -168,36 +170,60 @@
         }
         try {
           recognition.start();
-          isListening = true;
-          voiceBtn.textContent = '⏹ Parar';
-          voiceBtn.style.background = '#dc2626';
-          voiceBtn.style.borderColor = '#dc2626';
-          voiceStatus.textContent = '🎤 Ouvindo... fale o número';
-          voiceStatus.style.color = '#16a34a';
         } catch(e) {
-          voiceStatus.textContent = '⚠️ Não foi possível iniciar o microfone.';
+          voiceStatus.textContent = '⚠️ Erro ao iniciar: ' + e.message;
           voiceStatus.style.color = '#dc2626';
         }
       });
 
+      recognition.onstart = function() {
+        isListening = true;
+        voiceBtn.textContent = '⏹ Parar';
+        voiceBtn.style.background = '#dc2626';
+        voiceBtn.style.borderColor = '#dc2626';
+        voiceStatus.textContent = '🎤 Ouvindo... fale o número (ex: 120 ou cento e vinte)';
+        voiceStatus.style.color = '#16a34a';
+      };
+
       recognition.onresult = function(event) {
-        for (var i = 0; i < event.results[0].length; i++) {
-          var transcript = event.results[0][i].transcript;
-          var num = parseSpokenNumber(transcript);
+        var finalText = '';
+        var interimText = '';
+        for (var i = event.resultIndex; i < event.results.length; i++) {
+          var transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalText += transcript;
+          } else {
+            interimText += transcript;
+          }
+        }
+
+        var textToCheck = finalText || interimText;
+        if (textToCheck) {
+          var num = parseSpokenNumber(textToCheck);
           if (num !== null && num >= 20 && num <= 600) {
             levelInput.value = num;
             voiceStatus.textContent = '✅ Entendido: ' + num + ' mg/dL';
             voiceStatus.style.color = '#16a34a';
-            return;
+            try { recognition.stop(); } catch(e) {}
+          } else if (interimText) {
+            voiceStatus.textContent = '...' + textToCheck;
+            voiceStatus.style.color = '#6b7280';
           }
         }
-        var t = event.results[0][0].transcript;
-        voiceStatus.textContent = '⚠️ Não entendi: "' + t + '". Tente novamente.';
-        voiceStatus.style.color = '#d97706';
       };
 
       recognition.onerror = function(event) {
-        voiceStatus.textContent = '⚠️ Erro: ' + event.error;
+        var msg = event.error;
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          msg = 'Microfone bloqueado. Permita o acesso ao microfone nas configurações do navegador.';
+        } else if (event.error === 'no-speech') {
+          msg = 'Não detectei fala. Tente novamente.';
+        } else if (event.error === 'audio-capture') {
+          msg = 'Nenhum microfone encontrado.';
+        } else if (event.error === 'not-supported') {
+          msg = 'Reconhecimento de voz não suportado neste navegador. Use Chrome ou Edge.';
+        }
+        voiceStatus.textContent = '⚠️ ' + msg;
         voiceStatus.style.color = '#dc2626';
         isListening = false;
         voiceBtn.textContent = '🎤 Falar';
@@ -206,13 +232,23 @@
       };
 
       recognition.onend = function() {
-        isListening = false;
-        voiceBtn.textContent = '🎤 Falar';
-        voiceBtn.style.background = '#16a34a';
-        voiceBtn.style.borderColor = '#16a34a';
+        if (isListening) {
+          isListening = false;
+          voiceBtn.textContent = '🎤 Falar';
+          voiceBtn.style.background = '#16a34a';
+          voiceBtn.style.borderColor = '#16a34a';
+          if (voiceStatus.textContent.indexOf('✅') !== 0 && voiceStatus.textContent.indexOf('⚠️') !== 0) {
+            voiceStatus.textContent = '🎤 Toque em Falar e diga o número';
+            voiceStatus.style.color = '#6b7280';
+          }
+        }
       };
+
+      voiceStatus.textContent = '🎤 Toque em Falar e diga o número';
     } else if (voiceBtn) {
       voiceBtn.style.display = 'none';
+      voiceStatus.textContent = 'ℹ️ Reconhecimento de voz não disponível. Use o teclado numérico abaixo.';
+      voiceStatus.style.color = '#6b7280';
     }
 
     if (toggleNumpad && numpad) {
