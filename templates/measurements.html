@@ -6,7 +6,6 @@
   <section class="card">
     <h2>Registrar medição de glicemia</h2>
 
-    {% if AI_ENABLED %}
     <div style="margin-bottom:1rem; padding:1rem; background:#f0f9ff; border:1px dashed #0ea5e9; border-radius:.5rem;">
       <p style="margin:0 0 .5rem 0; font-size:.9rem; color:#0369a1;">
         📱 <strong>Tire uma foto do medidor</strong> para preencher data, hora e o nível automaticamente.
@@ -23,7 +22,6 @@
       </div>
       <div id="ocr-debug" style="margin-top:.5rem; font-size:.75rem; color:#64748b; display:none;"></div>
     </div>
-    {% endif %}
 
     <form method="post" action="{{ url_for('measurements') }}">
       <div class="form-group">
@@ -89,6 +87,7 @@
       <p class="muted">Nenhuma medição registrada ainda.</p>
     {% endif %}
   </section>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
   document.addEventListener('DOMContentLoaded', function() {
     var timeInput = document.querySelector('input[name="time"]');
@@ -112,6 +111,55 @@
     var photoPreview = document.getElementById('photo-preview');
     var previewImg = document.getElementById('preview-img');
     var ocrDebug = document.getElementById('ocr-debug');
+    var tesseractWorker = null;
+    var workerReady = false;
+
+    function loadWorker() {
+      if (workerReady) return Promise.resolve(tesseractWorker);
+      photoStatus.textContent = 'Carregando leitor de imagens...';
+      photoStatus.style.color = '#0369a1';
+      return Tesseract.createWorker('eng', 1, {
+        logger: function(m) {
+          if (m.status === 'recognizing text') {
+            var pct = Math.round(m.progress * 100);
+            photoStatus.textContent = 'Analisando foto... ' + pct + '%';
+          }
+        }
+      }).then(function(w) {
+        tesseractWorker = w;
+        workerReady = true;
+        return w;
+      });
+    }
+
+    function parseExifDate(arrayBuffer) {
+      var view = new DataView(arrayBuffer);
+      if (view.getUint16(0, false) !== 0xFFD8) return null;
+      var offset = 2;
+      while (offset < view.byteLength) {
+        var marker = view.getUint16(offset, false);
+        offset += 2;
+        if (marker === 0xFFE1) {
+          var length = view.getUint16(offset, false);
+          var exifStart = offset + 2;
+          var exifStr = '';
+          for (var i = 0; i < length - 2 && i < 100; i++) {
+            exifStr += String.fromCharCode(view.getUint8(exifStart + i));
+          }
+          var match = exifStr.match(/(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+          if (match) {
+            return {
+              date: match[1] + '-' + match[2] + '-' + match[3],
+              time: match[4] + ':' + match[5]
+            };
+          }
+          return null;
+        } else {
+          offset += view.getUint16(offset, false);
+        }
+      }
+      return null;
+    }
 
     if (photoInput) {
       photoInput.addEventListener('change', function(e) {
@@ -125,49 +173,55 @@
         };
         reader.readAsDataURL(file);
 
-        photoStatus.textContent = 'Analisando foto...';
-        photoStatus.style.color = '#0369a1';
         ocrDebug.style.display = 'none';
 
-        var formData = new FormData();
-        formData.append('photo', file);
-
-        fetch("{{ url_for('analyze_photo') }}", {
-          method: 'POST',
-          body: formData
-        })
-        .then(function(resp) { return resp.json(); })
-        .then(function(data) {
-          if (data.error) {
-            photoStatus.textContent = '⚠️ ' + data.error;
-            photoStatus.style.color = '#dc2626';
-          } else {
-            if (data.date) {
-              document.querySelector('input[name="date"]').value = data.date;
-            }
-            if (data.time) {
-              document.querySelector('input[name="time"]').value = data.time;
-            }
-            if (data.level) {
-              document.querySelector('input[name="level"]').value = data.level;
-              photoStatus.textContent = '✅ Nível lido: ' + data.level + ' mg/dL. Confira e ajuste se necessário.';
-              photoStatus.style.color = '#16a34a';
-            } else {
-              photoStatus.textContent = '⚠️ Data/hora preenchidas, mas não foi possível ler o número. Digite manualmente.';
-              photoStatus.style.color = '#d97706';
-            }
-
-            if (data.ocr_results && data.ocr_results.length > 0) {
-              var lines = data.ocr_results.map(function(r) {
-                return r.digits + ' (conf: ' + r.confidence + ')';
-              }).join(', ');
-              ocrDebug.textContent = 'Números detectados: ' + lines;
-              ocrDebug.style.display = 'block';
-            }
+        var exifInfo = null;
+        var exifReader = new FileReader();
+        exifReader.onload = function(ev) {
+          exifInfo = parseExifDate(ev.target.result);
+          if (exifInfo) {
+            document.querySelector('input[name="date"]').value = exifInfo.date;
+            document.querySelector('input[name="time"]').value = exifInfo.time;
           }
-        })
-        .catch(function(err) {
-          photoStatus.textContent = '⚠️ Erro ao enviar a foto: ' + err.message;
+        };
+        exifReader.readAsArrayBuffer(file);
+
+        loadWorker().then(function(worker) {
+          photoStatus.textContent = 'Analisando foto...';
+          photoStatus.style.color = '#0369a1';
+          return worker.recognize(file);
+        }).then(function(result) {
+          var text = result.data.text || '';
+          var lines = text.split('\n').filter(function(l) { return l.trim(); });
+          ocrDebug.textContent = 'Texto detectado: ' + lines.join(' | ');
+          ocrDebug.style.display = 'block';
+
+          var allDigits = text.replace(/\D/g, '');
+          var numbers = (text.match(/\d+/g) || []).map(Number);
+          var valid = numbers.filter(function(n) { return n >= 20 && n <= 600; });
+          var level = null;
+          if (valid.length > 0) {
+            level = valid.sort(function(a, b) { return a - b; })[0];
+          } else if (numbers.length > 0) {
+            var closest = numbers[0];
+            var minDiff = Math.abs(closest - 100);
+            for (var i = 1; i < numbers.length; i++) {
+              var diff = Math.abs(numbers[i] - 100);
+              if (diff < minDiff) { minDiff = diff; closest = numbers[i]; }
+            }
+            level = closest;
+          }
+
+          if (level) {
+            document.querySelector('input[name="level"]').value = level;
+            photoStatus.textContent = '✅ Nível lido: ' + level + ' mg/dL. Confira e ajuste se necessário.';
+            photoStatus.style.color = '#16a34a';
+          } else {
+            photoStatus.textContent = '⚠️ Não foi possível ler o número. Digite manualmente.';
+            photoStatus.style.color = '#d97706';
+          }
+        }).catch(function(err) {
+          photoStatus.textContent = '⚠️ Erro ao analisar: ' + err.message;
           photoStatus.style.color = '#dc2626';
         });
 
