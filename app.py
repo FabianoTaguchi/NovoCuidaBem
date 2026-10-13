@@ -1,9 +1,11 @@
 import os
+import re
 import shutil
 import sqlite3
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
+from PIL import Image, ImageOps, ExifTags
 
 # Permitir sobrescrever o caminho do banco via variável de ambiente (ex.: /var/data/cuidabem.db)
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "cuidabem.db"))
@@ -11,6 +13,10 @@ DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "cuidabem
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
 app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB para fotos
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "static", "uploads")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 ACTIVITY_CATEGORIES = [
     ("caminhada", "Caminhada"),
     ("natacao", "Natação"),
@@ -63,9 +69,106 @@ MEASUREMENT_CONTEXTS = [
 ]
 MEASUREMENT_CONTEXT_LABELS = dict(MEASUREMENT_CONTEXTS)
 
+MEAL_TYPES = [
+    ("cafe_manha", "Café da Manhã"),
+    ("almoco", "Almoço"),
+    ("lanche", "Lanche"),
+    ("jantar", "Jantar"),
+]
+MEAL_TYPE_LABELS = dict(MEAL_TYPES)
+
+# Leitor OCR carregado sob demanda (evita download de modelos no boot)
+_ocr_reader = None
+
+
+def get_ocr_reader():
+    global _ocr_reader
+    if _ocr_reader is None:
+        import easyocr
+        _ocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+    return _ocr_reader
+
+
+# Modelo de classificação de imagens (MobileNetV3 treinado no ImageNet)
+_food_model = None
+_food_transform = None
+_food_categories = None
+
+# Tradução das categorias do ImageNet para português
+IMAGE_NET_PT = {
+    "apple": "maçã", "banana": "banana", "orange": "laranja", "lemon": "limão",
+    "strawberry": "morango", "pineapple": "abacaxi", "fig": "figo", "pomegranate": "romã",
+    "carbonara": "carbonara", "pizza": "pizza", "cheeseburger": "cheeseburger",
+    "hotdog": "cachorro-quente", "guacamole": "guacamole", "burrito": "burrito",
+    "ice cream": "sorvete", "ice lolly": "picolé", "French loaf": "baguete",
+    "bagel": "bagel", "pretzel": "pretzel", "potpie": "torta salgada",
+    "consomme": "caldo", "hot pot": "fondue", "mashed potato": "purê de batata",
+    "chocolate sauce": "calda de chocolate", "dough": "massa", "meat loaf": "rolo de carne",
+    "eggnog": "gemada", "corn": "milho", "broccoli": "brócolis",
+    "custard apple": "fruta-do-conde", "acorn squash": "abóbora",
+    "butternut squash": "abóbora", "strawberry": "morango",
+    "bakery": "padaria", "coffee mug": "caneca de café", "coffeepot": "cafeteira",
+    "espresso": "café espresso", "espresso maker": "máquina de café",
+    "red wine": "vinho tinto", "wine bottle": "garrafa de vinho",
+    "beer bottle": "garrafa de cerveja", "beer glass": "copo de cerveja",
+    "plate": "prato", "cup": "copo", "soup bowl": "tigela de sopa",
+    "mixing bowl": "tigela de mistura", "milk can": "lata de leite",
+    "teapot": "bule de chá", "wooden spoon": "colher de pau",
+    "dining table": "mesa de jantar", "restaurant": "restaurante",
+    "plate rack": "escorredor de pratos", "measuring cup": "xicara de medir",
+    "acorn": "bolota", "cornet": "corneta",
+    "watermelon": "melancia", "mango": "manga", "avocado": "abacate",
+    "peach": "pêssego", "pear": "pera", "cherry": "cereja",
+    "grape": "uva", "custard": "pudim", "trifle": "trifle",
+    "pudding": "pudim", "chocolate": "chocolate", "candy": "bala",
+    "cookie": "biscoito", "cake": "bolo", "muffin": "muffin",
+    "doughnut": "rosquinha", "croissant": "croissant", "bread": "pão",
+    "cheese": "queijo", "milk": "leite", "butter": "manteiga",
+    "egg": "ovo", "rice": "arroz", "noodle": "macarrão",
+    "pasta": "massa", "salad": "salada", "soup": "sopa",
+    "sandwich": "sanduíche", "burger": "hambúrguer", "hamburger": "hambúrguer",
+    "shrimp": "camarão", "fish": "peixe", "chicken": "frango",
+    "beef": "carne bovina", "pork": "carne de porco", "meat": "carne",
+    "sauce": "molho", "cream": "creme", "sugar": "açúcar",
+    "tea": "chá", "coffee": "café", "juice": "suco",
+    "beer": "cerveja", "wine": "vinho", "soda": "refrigerante",
+    "tomato": "tomate", "potato": "batata", "onion": "cebola",
+    "carrot": "cenoura", "cabbage": "repolho", "corn": "milho",
+    "broccoli": "brócolis", "cauliflower": "couve-flor",
+    "crayfish": "lagosta", "goldfish": "peixe dourado",
+    "jellyfish": "água-viva", "starfish": "estrela-do-mar",
+}
+
+
+def translate_label(label):
+    if label in IMAGE_NET_PT:
+        return IMAGE_NET_PT[label]
+    lower = label.lower()
+    for en, pt in IMAGE_NET_PT.items():
+        if en in lower:
+            return pt
+    return label.replace("_", " ").capitalize()
+
+
+def get_food_model():
+    global _food_model, _food_transform, _food_categories
+    if _food_model is None:
+        import torch
+        from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
+        weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1
+        _food_model = mobilenet_v3_small(weights=weights)
+        _food_model.eval()
+        _food_transform = weights.transforms()
+        _food_categories = weights.meta["categories"]
+    return _food_model, _food_transform, _food_categories
+
 
 def digits_only(s):
     return "".join(ch for ch in (s or "") if ch.isdigit())
+
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def get_db_connection():
@@ -186,6 +289,28 @@ def init_db():
     acols = {row[1] for row in conn.execute("PRAGMA table_info(alerts)").fetchall()}
     if "alert_date" not in acols:
         conn.execute("ALTER TABLE alerts ADD COLUMN alert_date TEXT")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            meal_type TEXT NOT NULL,
+            meal_at TEXT NOT NULL,
+            description TEXT,
+            photo_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_meals_user_time
+        ON meals(user_id, meal_at DESC);
+        """
+    )
+
     conn.commit()
     conn.close()
 
@@ -755,7 +880,7 @@ def account():
 @app.route("/features")
 def features():
     # Página de funcionalidades: mostra links conforme estado de autenticação
-    is_logged_in = "user_id" in session
+    is_logged_in = "user_id" in session or session.get("is_admin")
     return render_template("features.html", is_logged_in=is_logged_in, name=session.get("user_name"))
 
 
@@ -1045,6 +1170,88 @@ def measurements():
     )
 
 
+@app.route("/measurements/analyze-photo", methods=["POST"])
+def analyze_photo():
+    if "user_id" not in session and not session.get("is_admin"):
+        return jsonify({"error": "Faça login para acessar."}), 401
+
+    file = request.files.get("photo")
+    if not file or not file.filename:
+        return jsonify({"error": "Nenhuma foto enviada."}), 400
+
+    try:
+        img = Image.open(file)
+    except Exception:
+        return jsonify({"error": "Arquivo de imagem inválido."}), 400
+
+    img = ImageOps.exif_transpose(img)
+
+    # --- Extrair data/hora dos metadados EXIF ---
+    date_str = None
+    time_str = None
+    exif = img.getexif()
+    if exif:
+        for tag_id, value in exif.items():
+            tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+            if tag_name in ("DateTimeOriginal", "DateTime", "DateTimeDigitized"):
+                try:
+                    dt = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
+                    date_str = dt.strftime("%Y-%m-%d")
+                    time_str = dt.strftime("%H:%M")
+                    break
+                except Exception:
+                    continue
+
+    # Fallback: usar data/hora atual
+    if not date_str or not time_str:
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M")
+
+    # --- OCR para ler o número da glicemia ---
+    level = None
+    ocr_debug = []
+    try:
+        import numpy as np
+        reader = get_ocr_reader()
+        img_array = np.array(img)
+        results = reader.readtext(
+            img_array,
+            allowlist="0123456789",
+            detail=1,
+        )
+
+        candidates = []
+        for bbox, text, conf in results:
+            digits = re.sub(r"\D", "", text)
+            if not digits:
+                continue
+            ocr_debug.append({"text": text, "digits": digits, "confidence": round(float(conf), 3)})
+            try:
+                val = int(digits)
+            except Exception:
+                continue
+            if 20 <= val <= 600:
+                candidates.append((val, float(conf)))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            level = candidates[0][0]
+    except Exception as e:
+        return jsonify({
+            "error": f"Falha no reconhecimento: {e}",
+            "date": date_str,
+            "time": time_str,
+        }), 500
+
+    return jsonify({
+        "date": date_str,
+        "time": time_str,
+        "level": level,
+        "ocr_results": ocr_debug,
+    })
+
+
 @app.route("/activities", methods=["GET", "POST"])
 def activities():
     if "user_id" not in session:
@@ -1214,6 +1421,175 @@ def activities_dashboard():
         total_minutes=total_minutes,
         top_category_label=top_category_label,
     )
+
+
+@app.route("/meals", methods=["GET", "POST"])
+def meals():
+    if "user_id" not in session:
+        flash("Faça login para acessar.", "error")
+        return redirect(url_for("index"))
+
+    user_id = session["user_id"]
+
+    if request.method == "POST":
+        meal_type = request.form.get("meal_type", "").strip()
+        date_str = request.form.get("date", "").strip()
+        time_str = request.form.get("time", "").strip()
+        description = request.form.get("description", "").strip()
+
+        errors = []
+        valid_types = {t for t, _ in MEAL_TYPES}
+        if meal_type not in valid_types:
+            errors.append("Tipo de refeição inválido.")
+        if not date_str or not time_str:
+            errors.append("Informe a data e a hora.")
+
+        meal_at = None
+        try:
+            meal_at = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        except Exception:
+            errors.append("Data ou hora inválidas.")
+
+        photo_filename = None
+        file = request.files.get("photo")
+        if file and file.filename:
+            if not allowed_file(file.filename):
+                errors.append("Formato de foto inválido. Use PNG, JPG, JPEG, GIF ou WEBP.")
+
+        if errors:
+            for e in errors:
+                flash(e, "error")
+            conn = get_db_connection()
+            entries = conn.execute(
+                "SELECT * FROM meals WHERE user_id = ? ORDER BY meal_at DESC LIMIT 50",
+                (user_id,),
+            ).fetchall()
+            conn.close()
+            return render_template(
+                "meals.html",
+                meal_types=MEAL_TYPES,
+                entries=entries,
+                meal_type_prev=meal_type,
+                date_prev=date_str,
+                time_prev=time_str,
+                description_prev=description,
+                date_default=datetime.now().strftime("%Y-%m-%d"),
+                time_default="",
+            )
+
+        if file and file.filename and allowed_file(file.filename):
+            ext = file.filename.rsplit(".", 1)[1].lower()
+            ts = datetime.now().strftime("%Y%m%d%H%M%S")
+            photo_filename = f"meal_{user_id}_{ts}_{os.urandom(4).hex()}.{ext}"
+            file.save(os.path.join(UPLOAD_FOLDER, photo_filename))
+
+        conn = get_db_connection()
+        conn.execute(
+            "INSERT INTO meals (user_id, meal_type, meal_at, description, photo_path) VALUES (?, ?, ?, ?, ?)",
+            (user_id, meal_type, meal_at.strftime("%Y-%m-%d %H:%M"), description or None, photo_filename),
+        )
+        conn.commit()
+        conn.close()
+        flash("Refeição registrada com sucesso.", "success")
+        return redirect(url_for("meals"))
+
+    conn = get_db_connection()
+    entries = conn.execute(
+        "SELECT * FROM meals WHERE user_id = ? ORDER BY meal_at DESC LIMIT 50",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+
+    return render_template(
+        "meals.html",
+        meal_types=MEAL_TYPES,
+        entries=entries,
+        date_default=datetime.now().strftime("%Y-%m-%d"),
+        time_default="",
+    )
+
+
+@app.route("/meals/analyze-photo", methods=["POST"])
+def analyze_meal_photo():
+    if "user_id" not in session and not session.get("is_admin"):
+        return jsonify({"error": "Faça login para acessar."}), 401
+
+    file = request.files.get("photo")
+    if not file or not file.filename:
+        return jsonify({"error": "Nenhuma foto enviada."}), 400
+
+    try:
+        img = Image.open(file)
+    except Exception:
+        return jsonify({"error": "Arquivo de imagem inválido."}), 400
+
+    img = ImageOps.exif_transpose(img)
+
+    # --- Extrair data/hora dos metadados EXIF ---
+    date_str = None
+    time_str = None
+    exif = img.getexif()
+    if exif:
+        for tag_id, value in exif.items():
+            tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+            if tag_name in ("DateTimeOriginal", "DateTime", "DateTimeDigitized"):
+                try:
+                    dt = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
+                    date_str = dt.strftime("%Y-%m-%d")
+                    time_str = dt.strftime("%H:%M")
+                    break
+                except Exception:
+                    continue
+    if not date_str or not time_str:
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M")
+
+    # --- Classificação do alimento com IA (MobileNetV3) ---
+    food_predictions = []
+    try:
+        import torch
+        import numpy as np
+        model, transform, categories = get_food_model()
+        img_rgb = img.convert("RGB")
+        img_t = transform(img_rgb).unsqueeze(0)
+        with torch.no_grad():
+            output = model(img_t)
+            probs = torch.nn.functional.softmax(output[0], dim=0)
+            top_prob, top_catid = torch.topk(probs, 3)
+        for i in range(top_prob.size(0)):
+            label_en = categories[top_catid[i].item()]
+            conf = float(top_prob[i].item())
+            food_predictions.append({"label": translate_label(label_en), "label_en": label_en, "confidence": round(conf, 3)})
+    except Exception as e:
+        pass
+
+    # --- OCR para ler texto de embalagens ---
+    ocr_texts = []
+    try:
+        import numpy as np
+        reader = get_ocr_reader()
+        img_array = np.array(img)
+        ocr_results = reader.readtext(img_array, detail=1)
+        for bbox, text, conf in ocr_results:
+            txt = text.strip()
+            if txt and len(txt) >= 2:
+                ocr_texts.append({"text": txt, "confidence": round(float(conf), 3)})
+    except Exception:
+        pass
+
+    # Determinar a melhor sugestão para o campo descrição
+    suggestion = None
+    if food_predictions and food_predictions[0]["confidence"] >= 0.20:
+        suggestion = food_predictions[0]["label"]
+
+    return jsonify({
+        "date": date_str,
+        "time": time_str,
+        "suggestion": suggestion,
+        "food_predictions": food_predictions,
+        "ocr_texts": ocr_texts,
+    })
 
 
 @app.route("/admin/db", methods=["GET", "POST"])

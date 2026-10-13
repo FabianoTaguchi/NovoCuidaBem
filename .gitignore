@@ -11,6 +11,9 @@ env/
 # Local database (usado em desenvolvimento)
 cuidabem.db
 
+# Fotos enviadas pelos usuários
+static/uploads/
+
 # Environment files
 .env
 

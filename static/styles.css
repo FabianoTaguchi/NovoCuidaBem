@@ -35,7 +35,7 @@ nav a:hover { color: var(--accent); }
 
 /* Cabeçalhos com ícones nas features */
 .feature-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .25rem; }
-.feature-head h3 { margin: 0; color: var(--text); }
+.feature-head h3 { margin: 0; color: var(--text); font-size: 1.1rem; line-height: 1.2; word-break: break-word; }
 .feature-icon { width: 28px; height: 28px; color: var(--accent); flex: 0 0 auto; }
 
 .form-group { margin-bottom: 1rem; }
@@ -196,6 +196,15 @@ select option { color: #1e3a8a; background: #ffffff; }
 .card.feature-green .feature-icon { color: #ffffff; }
 .card.feature-green .muted { color: rgba(255, 255, 255, 0.95); }
 
+.card.feature-orange {
+  background: #f97316;
+  border-color: #f97316;
+  color: #ffffff;
+}
+.card.feature-orange .feature-head h3,
+.card.feature-orange .feature-icon { color: #ffffff; }
+.card.feature-orange .muted { color: rgba(255, 255, 255, 0.95); }
+
 /* Cards clicáveis */
 .card.clickable { cursor: pointer; }
 .card.clickable:hover { filter: brightness(1.03); }
@@ -335,7 +344,8 @@ body { font-size: 1.05rem; }
 
   /* Grupos de rádio: duas colunas no mobile */
   .measurements-page .radio-group,
-  .activities-page .radio-group {
+  .activities-page .radio-group,
+  .meals-page .radio-group {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

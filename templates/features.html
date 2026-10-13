@@ -2,7 +2,7 @@
 
  {% block content %}
   {% if is_logged_in %}
-  <section style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem;">
+  <section style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .75rem;">
     <!-- Medições: quadro azul com texto branco -->
     <div class="card feature-blue clickable" data-href="{{ url_for('measurements') }}">
       <div class="feature-head">
@@ -36,6 +36,19 @@
         <h3>Alertas</h3>
       </div>
       <p class="muted">Configure lembretes de medicação, refeições e mais.</p>
+    </div>
+
+    <!-- Alimentação: quadro laranja com texto branco -->
+    <div class="card feature-orange clickable" data-href="{{ url_for('meals') }}">
+      <div class="feature-head">
+        <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M3 11h18l-1 9H4L3 11z" />
+          <path d="M3 11a9 9 0 0 1 18 0" />
+          <path d="M12 3v4" />
+        </svg>
+        <h3>Alimentação</h3>
+      </div>
+      <p class="muted">Registre suas refeições e alimentos consumidos.</p>
     </div>
 
     <!-- Botões de relatório abaixo dos respectivos cards -->

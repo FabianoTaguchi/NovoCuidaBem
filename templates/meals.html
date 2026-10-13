@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block body_class %}meals-page{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h2>Registro de alimentação</h2>
+
+    <div style="margin-bottom:1rem; padding:1rem; background:#fff7ed; border:1px dashed #f97316; border-radius:.5rem;">
+      <p style="margin:0 0 .5rem 0; font-size:.9rem; color:#9a3412;">
+        🍽️ <strong>Tire uma foto da refeição</strong> para preencher data, hora e identificar o alimento automaticamente.
+      </p>
+      <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center;">
+        <label for="meal-photo-input" class="btn primary" style="cursor:pointer; background:#f97316; border-color:#f97316;">
+          📷 Tirar foto / Enviar imagem
+        </label>
+        <input type="file" id="meal-photo-input" accept="image/*" capture="environment" style="display:none;">
+        <span id="meal-photo-status" style="font-size:.85rem; color:#475569;"></span>
+      </div>
+      <div id="meal-photo-preview" style="margin-top:.75rem; display:none;">
+        <img id="meal-preview-img" src="" alt="Prévia" style="max-width:100%; max-height:180px; border-radius:.5rem; border:1px solid #ddd;">
+      </div>
+      <div id="meal-ai-suggestions" style="margin-top:.5rem; font-size:.8rem; color:#64748b; display:none;"></div>
+    </div>
+
+    <form method="post" action="{{ url_for('meals') }}" enctype="multipart/form-data">
+      <div class="form-group">
+        <label id="meal_type_label">Refeição</label>
+        <div class="radio-group" role="radiogroup" aria-labelledby="meal_type_label">
+          {% for slug, label in meal_types %}
+            <label class="card" style="padding:.5rem 1rem; display:flex; align-items:center; gap:.5rem; cursor:pointer;">
+              <input type="radio" name="meal_type" value="{{ slug }}" {% if meal_type_prev == slug %}checked{% endif %} required>
+              <span style="font-weight:700; font-size:.95rem;">{{ label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="date">Data</label>
+        <input type="date" id="date" name="date" required value="{{ date_prev or date_default }}">
+      </div>
+      <div class="form-group">
+        <label for="time">Hora</label>
+        <input type="time" id="time" name="time" required value="{{ time_prev or time_default }}">
+      </div>
+      <div class="form-group">
+        <label for="description">Alimentação</label>
+        <textarea id="description" name="description" rows="3" placeholder="Descreva o que foi consumido...">{{ description_prev or '' }}</textarea>
+      </div>
+      <div class="form-group">
+        <label for="photo">Foto (opcional)</label>
+        <input type="file" id="photo" name="photo" accept="image/*" capture="environment">
+        <small class="muted">PNG, JPG, JPEG, GIF ou WEBP (máx. 16MB)</small>
+      </div>
+      <button type="submit" class="btn primary">Registrar</button>
+    </form>
+  </section>
+
+  <section class="card" style="margin-top:1rem;">
+    <h2>Últimas refeições</h2>
+    {% if entries and entries|length > 0 %}
+      <div style="display:grid; gap:1rem;">
+        {% for e in entries %}
+          <div style="border:1px solid #e5e7eb; border-radius:.5rem; padding:1rem; display:flex; gap:1rem; align-items:flex-start;">
+            {% if e['photo_path'] %}
+              <img src="{{ url_for('static', filename='uploads/' ~ e['photo_path']) }}" alt="Foto da refeição" style="width:90px; height:90px; object-fit:cover; border-radius:.5rem; flex-shrink:0;">
+            {% else %}
+              <div style="width:90px; height:90px; background:#f3f4f6; border-radius:.5rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; color:#9ca3af;">Sem foto</div>
+            {% endif %}
+            <div style="flex:1;">
+              <div style="font-weight:700;">
+                {% set mt = e['meal_type'] %}
+                {% if mt == 'cafe_manha' %}Café da Manhã{% elif mt == 'almoco' %}Almoço{% elif mt == 'lanche' %}Lanche{% elif mt == 'jantar' %}Jantar{% else %}{{ mt }}{% endif %}
+              </div>
+              <div class="muted" style="font-size:.85rem;">{{ e['meal_at'] }}</div>
+              {% if e['description'] %}
+                <div style="margin-top:.25rem; font-size:.9rem;">{{ e['description'] }}</div>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">Nenhuma refeição registrada ainda.</p>
+    {% endif %}
+  </section>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      var timeInput = document.querySelector('input[name="time"]');
+      if (timeInput && !timeInput.value) {
+        var now = new Date();
+        var hh = String(now.getHours()).padStart(2, '0');
+        var mm = String(now.getMinutes()).padStart(2, '0');
+        timeInput.value = hh + ':' + mm;
+      }
+      var dateInput = document.querySelector('input[name="date"]');
+      if (dateInput && !dateInput.value) {
+        var d = new Date();
+        var yyyy = d.getFullYear();
+        var mm2 = String(d.getMonth() + 1).padStart(2, '0');
+        var dd = String(d.getDate()).padStart(2, '0');
+        dateInput.value = yyyy + '-' + mm2 + '-' + dd;
+      }
+
+      var photoInput = document.getElementById('meal-photo-input');
+      var photoStatus = document.getElementById('meal-photo-status');
+      var photoPreview = document.getElementById('meal-photo-preview');
+      var previewImg = document.getElementById('meal-preview-img');
+      var suggestions = document.getElementById('meal-ai-suggestions');
+
+      if (photoInput) {
+        photoInput.addEventListener('change', function(e) {
+          var file = e.target.files[0];
+          if (!file) return;
+
+          var reader = new FileReader();
+          reader.onload = function(ev) {
+            previewImg.src = ev.target.result;
+            photoPreview.style.display = 'block';
+          };
+          reader.readAsDataURL(file);
+
+          photoStatus.textContent = 'Analisando a foto...';
+          photoStatus.style.color = '#9a3412';
+          suggestions.style.display = 'none';
+
+          var formData = new FormData();
+          formData.append('photo', file);
+
+          fetch("{{ url_for('analyze_meal_photo') }}", {
+            method: 'POST',
+            body: formData
+          })
+          .then(function(resp) { return resp.json(); })
+          .then(function(data) {
+            if (data.error) {
+              photoStatus.textContent = '⚠️ ' + data.error;
+              photoStatus.style.color = '#dc2626';
+            } else {
+              if (data.date) {
+                document.querySelector('input[name="date"]').value = data.date;
+              }
+              if (data.time) {
+                document.querySelector('input[name="time"]').value = data.time;
+              }
+
+              var descInput = document.querySelector('textarea[name="description"]');
+              if (data.suggestion) {
+                descInput.value = data.suggestion;
+                photoStatus.textContent = '✅ Alimento identificado: ' + data.suggestion + '. Confira e ajuste se necessário.';
+                photoStatus.style.color = '#16a34a';
+              } else {
+                photoStatus.textContent = '⚠️ Não foi possível identificar o alimento. Digite manualmente.';
+                photoStatus.style.color = '#d97706';
+              }
+
+              var parts = [];
+              if (data.food_predictions && data.food_predictions.length > 0) {
+                var preds = data.food_predictions.map(function(p) {
+                  return p.label.replace(/_/g, ' ') + ' (' + Math.round(p.confidence * 100) + '%)';
+                }).join(', ');
+                parts.push('IA: ' + preds);
+              }
+              if (data.ocr_texts && data.ocr_texts.length > 0) {
+                var ocr = data.ocr_texts.map(function(t) { return t.text; }).join(', ');
+                parts.push('Texto lido: ' + ocr);
+              }
+              if (parts.length > 0) {
+                suggestions.innerHTML = parts.join('<br>');
+                suggestions.style.display = 'block';
+              }
+            }
+          })
+          .catch(function(err) {
+            photoStatus.textContent = '⚠️ Erro ao enviar a foto: ' + err.message;
+            photoStatus.style.color = '#dc2626';
+          });
+
+          photoInput.value = '';
+        });
+      }
+    });
+  </script>
+{% endblock %}
