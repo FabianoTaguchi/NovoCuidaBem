@@ -6,6 +6,7 @@
   <section class="card">
     <h2>Registro de alimentação</h2>
 
+    {% if AI_ENABLED %}
     <div style="margin-bottom:1rem; padding:1rem; background:#fff7ed; border:1px dashed #f97316; border-radius:.5rem;">
       <p style="margin:0 0 .5rem 0; font-size:.9rem; color:#9a3412;">
         🍽️ <strong>Tire uma foto da refeição</strong> para preencher data, hora e identificar o alimento automaticamente.
@@ -22,6 +23,7 @@
       </div>
       <div id="meal-ai-suggestions" style="margin-top:.5rem; font-size:.8rem; color:#64748b; display:none;"></div>
     </div>
+    {% endif %}
 
     <form method="post" action="{{ url_for('meals') }}" enctype="multipart/form-data">
       <div class="form-group">

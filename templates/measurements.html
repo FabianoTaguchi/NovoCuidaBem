@@ -6,6 +6,7 @@
   <section class="card">
     <h2>Registrar medição de glicemia</h2>
 
+    {% if AI_ENABLED %}
     <div style="margin-bottom:1rem; padding:1rem; background:#f0f9ff; border:1px dashed #0ea5e9; border-radius:.5rem;">
       <p style="margin:0 0 .5rem 0; font-size:.9rem; color:#0369a1;">
         📱 <strong>Tire uma foto do medidor</strong> para preencher data, hora e o nível automaticamente.
@@ -22,6 +23,7 @@
       </div>
       <div id="ocr-debug" style="margin-top:.5rem; font-size:.75rem; color:#64748b; display:none;"></div>
     </div>
+    {% endif %}
 
     <form method="post" action="{{ url_for('measurements') }}">
       <div class="form-group">

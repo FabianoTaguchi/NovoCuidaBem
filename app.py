@@ -17,6 +17,7 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB para fotos
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "static", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+AI_ENABLED = os.getenv("AI_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 ACTIVITY_CATEGORIES = [
     ("caminhada", "Caminhada"),
     ("natacao", "Natação"),
@@ -169,6 +170,11 @@ def digits_only(s):
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.context_processor
+def inject_globals():
+    return {"AI_ENABLED": AI_ENABLED}
 
 
 def get_db_connection():
@@ -1175,6 +1181,9 @@ def analyze_photo():
     if "user_id" not in session and not session.get("is_admin"):
         return jsonify({"error": "Faça login para acessar."}), 401
 
+    if not AI_ENABLED:
+        return jsonify({"error": "O reconhecimento automático está desativado neste ambiente. Digite os dados manualmente."}), 403
+
     file = request.files.get("photo")
     if not file or not file.filename:
         return jsonify({"error": "Nenhuma foto enviada."}), 400
@@ -1513,6 +1522,9 @@ def meals():
 def analyze_meal_photo():
     if "user_id" not in session and not session.get("is_admin"):
         return jsonify({"error": "Faça login para acessar."}), 401
+
+    if not AI_ENABLED:
+        return jsonify({"error": "O reconhecimento automático está desativado neste ambiente. Digite os dados manualmente."}), 403
 
     file = request.files.get("photo")
     if not file or not file.filename:
