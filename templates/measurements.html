@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block body_class %}measurements-page{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h2>Registrar medição de glicemia</h2>
+    <form method="post" action="{{ url_for('measurements') }}">
+      <div class="form-group">
+        <label for="date">Data</label>
+        <input type="date" id="date" name="date" required value="{{ date_prev or date_default }}">
+      </div>
+      <div class="form-group">
+        <label for="time">Hora</label>
+        <input type="time" id="time" name="time" required value="{{ time_prev or time_default }}">
+      </div>
+      <div class="form-group">
+        <label for="level">Nível <span class="unit-badge">mg/dL</span></label>
+        <input type="number" id="level" name="level" required step="0.1" min="20" max="600" placeholder="Ex: 105" value="{{ level_prev or '' }}">
+      </div>
+      <div class="form-group">
+        <label id="measurement_context_label">Momento da medição</label>
+        <div class="radio-group" role="radiogroup" aria-labelledby="measurement_context_label">
+          {% for slug, label in measurement_contexts %}
+            <label class="card radio-option" style="padding:.5rem 1rem; display:flex; align-items:center; gap:.5rem; cursor:pointer;">
+              <input type="radio" name="measurement_context" value="{{ slug }}" {% if context_prev == slug %}checked{% endif %} required>
+              <span>{{ label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="notes">Observações (opcional)</label>
+        <textarea id="notes" name="notes" rows="3" placeholder="Detalhes, sintomas, alimentação etc.">{{ notes_prev or '' }}</textarea>
+      </div>
+      <button type="submit" class="btn primary">Registrar</button>
+    </form>
+  </section>
+
+  <section class="card" style="margin-top:1rem;">
+    <h2>Últimas medições</h2>
+    {% if entries and entries|length > 0 %}
+      <div class="table-responsive">
+        <table class="table table-striped align-middle">
+          <thead class="table-light">
+            <tr>
+              <th scope="col">Data/Hora</th>
+              <th scope="col">Nível (mg/dL)</th>
+              <th scope="col">Momento</th>
+              <th scope="col">Observações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in entries %}
+              <tr>
+                <td>{{ e['measured_at'] }}</td>
+                <td>{{ '%.1f'|format(e['glucose_level']) }}</td>
+                <td>
+                  {% set ctx = e['measurement_context'] %}
+                  {% if ctx == 'em_jejum' %}Em Jejum{% elif ctx == 'antes_refeicao' %}Antes da Refeição{% elif ctx == '2h_pos_refeicao' %}2h após a refeição{% elif ctx == 'antes_dormir' %}Antes de dormir{% else %}-{% endif %}
+                </td>
+                <td>{{ e['notes'] or '-' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Nenhuma medição registrada ainda.</p>
+    {% endif %}
+  </section>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var timeInput = document.querySelector('input[name="time"]');
+    if (timeInput && !timeInput.value) {
+      var now = new Date();
+      var hh = String(now.getHours()).padStart(2, '0');
+      var mm = String(now.getMinutes()).padStart(2, '0');
+      timeInput.value = hh + ':' + mm;
+    }
+    var dateInput = document.querySelector('input[name="date"]');
+    if (dateInput && !dateInput.value) {
+      var d = new Date();
+      var yyyy = d.getFullYear();
+      var mm2 = String(d.getMonth() + 1).padStart(2, '0');
+      var dd = String(d.getDate()).padStart(2, '0');
+      dateInput.value = yyyy + '-' + mm2 + '-' + dd;
+    }
+  });
+</script>
+{% endblock %}

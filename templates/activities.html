@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block body_class %}activities-page{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h2>Checklist de atividades físicas</h2>
+    <form method="post" action="{{ url_for('activities') }}">
+      <div class="form-group">
+        <label id="activity_category_label">Atividade</label>
+        <div class="radio-group" role="radiogroup" aria-labelledby="activity_category_label">
+          {% for slug, label in categories %}
+            <label class="card" style="padding:.5rem 1rem; display:flex; align-items:center; gap:.5rem; cursor:pointer;">
+              <input type="radio" name="category" value="{{ slug }}" {% if category_prev == slug %}checked{% endif %} required>
+              <span style="font-weight:700; font-size:.95rem;">{{ label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="duration">Tempo (minutos)</label>
+        <input type="number" id="duration" name="duration" required min="1" step="1" placeholder="Ex: 45" value="{{ duration_prev or '' }}">
+      </div>
+      <div class="form-group">
+        <label for="date">Data</label>
+        <input type="date" id="date" name="date" required value="{{ date_prev or date_default }}">
+      </div>
+      <div class="form-group">
+        <label for="time">Hora</label>
+        <input type="time" id="time" name="time" required value="{{ time_prev or time_default }}">
+      </div>
+      <button type="submit" class="btn primary">Registrar</button>
+    </form>
+  </section>
+
+  <section class="card" style="margin-top:1rem;">
+    <h2>Resumo mensal ({{ month_key }})</h2>
+    {% if summary and summary|length > 0 %}
+      <div class="table-responsive">
+        <table class="table table-striped align-middle">
+          <thead class="table-light">
+            <tr>
+              <th scope="col">Categoria</th>
+              <th scope="col">Quantidade</th>
+              <th scope="col">Tempo total (min)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in summary %}
+              <tr>
+                <td>{{ category_labels[row['category']] }}</td>
+                <td>{{ row['count'] }}</td>
+                <td>{{ row['total'] }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Ainda não há atividades registradas neste mês.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" style="margin-top:1rem;">
+    <h2>Últimas atividades</h2>
+    {% if entries and entries|length > 0 %}
+      <div class="table-responsive">
+        <table class="table table-striped align-middle">
+          <thead class="table-light">
+            <tr>
+              <th scope="col">Data/Hora</th>
+              <th scope="col">Atividade</th>
+              <th scope="col">Tempo (min)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in entries %}
+              <tr>
+                <td>{{ e['performed_at'] }}</td>
+                <td>{{ category_labels[e['category']] }}</td>
+                <td>{{ e['duration_minutes'] }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Nenhuma atividade registrada ainda.</p>
+    {% endif %}
+  </section>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      var timeInput = document.querySelector('input[name="time"]');
+      if (timeInput && !timeInput.value) {
+        var now = new Date();
+        var hh = String(now.getHours()).padStart(2, '0');
+        var mm = String(now.getMinutes()).padStart(2, '0');
+        timeInput.value = hh + ':' + mm;
+      }
+      var dateInput = document.querySelector('input[name="date"]');
+      if (dateInput && !dateInput.value) {
+        var d = new Date();
+        var yyyy = d.getFullYear();
+        var mm2 = String(d.getMonth() + 1).padStart(2, '0');
+        var dd = String(d.getDate()).padStart(2, '0');
+        dateInput.value = yyyy + '-' + mm2 + '-' + dd;
+      }
+    });
+  </script>
+{% endblock %}

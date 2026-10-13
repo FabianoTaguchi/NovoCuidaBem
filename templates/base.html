@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>CuidaBem - Controle de Diabetes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1e3a8a">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <header class="site-header">
+    <nav class="navbar navbar-expand-md navbar-light bg-white border-bottom">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="{{ url_for('features') }}">CuidaBem</a>
+        {% if session.get('user_id') %}
+          <span class="navbar-text d-none d-sm-inline ms-2 welcome-msg">Bem-vindo(a), {{ session.get('user_name') }}</span>
+        {% endif %}
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain" aria-controls="navbarMain" aria-expanded="false" aria-label="Alternar navegação">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarMain">
+          <ul class="navbar-nav ms-auto">
+            {% if session.get('user_id') or session.get('is_admin') %}
+              {% if session.get('user_id') %}
+                {% if request.endpoint != 'account' and request.endpoint != 'measurements' and request.endpoint != 'activities' and request.endpoint != 'activities_dashboard' and request.endpoint != 'alerts' and request.endpoint != 'dashboard' %}
+                  <li class="nav-item">
+                    <a href="{{ url_for('account') }}" class="nav-link nav-profile"><strong>Perfil</strong></a>
+                  </li>
+                {% endif %}
+                {% if request.endpoint != 'features' and request.endpoint != 'account' %}
+                  <li class="nav-item">
+                    <a href="{{ url_for('features') }}" class="nav-link nav-back"><strong>Voltar</strong></a>
+                  </li>
+                {% endif %}
+                <li class="nav-item"><a href="{{ url_for('logout') }}" class="nav-link">Sair</a></li>
+              {% else %}
+                {% if request.endpoint != 'usuarios' %}
+                  <li class="nav-item"><a href="{{ url_for('index') }}" class="nav-link nav-back"><strong>Voltar</strong></a></li>
+                {% endif %}
+                <li class="nav-item"><a href="{{ url_for('logout') }}" class="nav-link">Sair</a></li>
+              {% endif %}
+            {% endif %}
+          </ul>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main class="container py-3">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash-list">
+          {% for category, message in messages %}
+            <li class="flash {{ category }}">{{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <small>&copy; 2025 CuidaBem</small>
+    </div>
+  </footer>
+  <!-- Modal de alerta (bloqueante até clicar em OK) -->
+  <div id="alert-modal-overlay" class="modal-overlay" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-content" role="document">
+      <h3 id="alert-modal-title">Lembrete</h3>
+      <p id="alert-modal-body" class="muted"></p>
+      <div class="modal-actions">
+        <button id="alert-modal-ok" class="btn primary">OK</button>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  {% if session.get('user_id') %}
+  <script>
+    (function(){
+      // Notificações web (não bloqueantes) se suportadas
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(function(){});
+      }
+      var cache = null;
+      var lastFetch = 0;
+      var NOTIFY_PREFIX = 'alerts_notified_';
+      function markNotified(key){ try { localStorage.setItem(NOTIFY_PREFIX + key, '1'); } catch(e){} }
+      function wasNotified(key){ try { return localStorage.getItem(NOTIFY_PREFIX + key) === '1'; } catch(e){ return false; } }
+      // Áudio: preparar AudioContext e função de beep
+      var AC = null;
+      function ensureAudio(){
+        try {
+          if (!AC && (window.AudioContext || window.webkitAudioContext)) {
+            AC = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          if (AC && AC.state === 'suspended') { AC.resume(); }
+        } catch(e){}
+      }
+      ['pointerdown','keydown','touchstart'].forEach(function(ev){
+        document.addEventListener(ev, ensureAudio, { passive: true });
+      });
+      function playBeep(count, durationMs, gapMs, freq){
+        ensureAudio();
+        if (!AC) { return; }
+        var time = AC.currentTime;
+        for (var i=0; i<(count||1); i++) {
+          var osc = AC.createOscillator();
+          var gain = AC.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = freq || 1100;
+          gain.gain.setValueAtTime(0, time);
+          gain.gain.linearRampToValueAtTime(0.08, time + 0.02);
+          gain.gain.linearRampToValueAtTime(0.0, time + (durationMs||250)/1000);
+          osc.connect(gain);
+          gain.connect(AC.destination);
+          osc.start(time);
+          osc.stop(time + (durationMs||250)/1000);
+          time += ((durationMs||250) + (gapMs||150)) / 1000;
+        }
+      }
+      // Modal elements
+      var overlay = document.getElementById('alert-modal-overlay');
+      var titleEl = document.getElementById('alert-modal-title');
+      var bodyEl = document.getElementById('alert-modal-body');
+      var okBtn = document.getElementById('alert-modal-ok');
+      var escHandler = null;
+      function showAlertModal(typeLabel, timeLabel){
+        try {
+          titleEl.textContent = 'Lembrete: ' + (typeLabel || 'Alerta');
+          bodyEl.textContent = 'Hoje às ' + (timeLabel || '');
+          overlay.classList.add('show');
+          overlay.setAttribute('aria-hidden','false');
+          escHandler = function(e){ if (e.key === 'Escape') { e.preventDefault(); } };
+          document.addEventListener('keydown', escHandler, true);
+          // Som de alerta e vibração (quando suportado)
+          playBeep(3, 220, 140, 1200);
+          if (navigator && typeof navigator.vibrate === 'function') {
+            try { navigator.vibrate([200, 100, 200]); } catch(e){}
+          }
+        } catch(e){}
+      }
+      function hideAlertModal(){
+        try {
+          overlay.classList.remove('show');
+          overlay.setAttribute('aria-hidden','true');
+          if (escHandler) { document.removeEventListener('keydown', escHandler, true); escHandler = null; }
+        } catch(e){}
+      }
+      okBtn && (okBtn.onclick = function(){ hideAlertModal(); });
+      // Permitir clique no botão OK; bloquear apenas cliques no fundo
+      overlay && overlay.addEventListener('click', function(e){
+        if (e.target === overlay) { e.stopPropagation(); e.preventDefault(); }
+      }, false);
+      async function fetchAlerts(){
+        var now = Date.now();
+        if (now - lastFetch < 4*60*1000) { return; }
+        lastFetch = now;
+        try {
+          var res = await fetch('{{ url_for("alerts_data") }}');
+          if (!res.ok) { return; }
+          var json = await res.json();
+          cache = json.alerts || [];
+        } catch(e){}
+      }
+      function dowSlug(d){ return ['sun','mon','tue','wed','thu','fri','sat'][d.getDay()]; }
+      function check(){
+        if (!Array.isArray(cache)) { return; }
+        var now = new Date();
+        var nowMin = now.getHours()*60 + now.getMinutes();
+        var todaySlug = dowSlug(now);
+        var todayDate = now.toISOString().slice(0,10); // YYYY-MM-DD
+        cache.forEach(function(a){
+          var hhmm = (a.alert_time || '').split(':');
+          if (hhmm.length < 2) { return; }
+          var target = parseInt(hhmm[0],10)*60 + parseInt(hhmm[1],10);
+          var diff = target - nowMin;
+          if (diff < 0 || diff > 10) { return; }
+          var shouldToday = false;
+          if (a.alert_date) {
+            shouldToday = (a.alert_date === todayDate);
+          } else if (Array.isArray(a.days) && a.days.length > 0) {
+            shouldToday = a.days.indexOf(todaySlug) >= 0;
+          }
+          if (!shouldToday) { return; }
+          var key = a.id + '_' + todayDate + '_' + (a.alert_date ? 'date' : 'days') + '_' + a.alert_time;
+          if (wasNotified(key)) { return; }
+          // Mostrar modal bloqueante com tipo de alerta
+          showAlertModal(a.alert_type_label || 'Alerta', a.alert_time);
+          markNotified(key);
+          // Além do modal, tentar notificação nativa se permitida
+          try {
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('Lembrete: ' + (a.alert_type_label || 'Alerta'), { body: 'Hoje às ' + a.alert_time });
+            }
+          } catch(e){}
+        });
+      }
+      fetchAlerts();
+      setInterval(fetchAlerts, 5*60*1000);
+      setInterval(check, 60*1000);
+    })();
+  </script>
+  {% endif %}
+  <script>
+    // Registro do Service Worker para PWA (funciona em localhost/HTTPS)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function(){
+        navigator.serviceWorker.register('{{ url_for('static', filename='service-worker.js') }}')
+          .catch(function(e){ console.warn('SW register failed', e); });
+      });
+    }
+  </script>
+  <script>
+    // Máscara para todos os campos de telefone (input[type="tel"]) — padrão BR
+    (function(){
+      function formatPhone(val){
+        var d = (val || '').replace(/\D/g, '').slice(0, 11);
+        var out = '';
+        if (d.length === 0) return '';
+        if (d.length <= 2) {
+          out = '(' + d;
+        } else if (d.length <= 6) {
+          out = '(' + d.slice(0,2) + ') ' + d.slice(2);
+        } else if (d.length <= 10) {
+          out = '(' + d.slice(0,2) + ') ' + d.slice(2,6) + '-' + d.slice(6);
+        } else {
+          out = '(' + d.slice(0,2) + ') ' + d.slice(2,7) + '-' + d.slice(7);
+        }
+        return out;
+      }
+      function applyMask(el){
+        var val = el.value || '';
+        var formatted = formatPhone(val);
+        if (formatted !== val) { el.value = formatted; }
+      }
+      function bindMask(el){
+        if (!el || el.__phoneMaskBound) return;
+        el.__phoneMaskBound = true;
+        ['input','blur','change'].forEach(function(ev){
+          el.addEventListener(ev, function(){ applyMask(el); });
+        });
+        // Aplicar no carregamento se já houver valor
+        applyMask(el);
+      }
+      function init(){
+        var phones = document.querySelectorAll('input[type="tel"]');
+        for (var i=0; i<phones.length; i++) { bindMask(phones[i]); }
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        init();
+      }
+      // Observador para inputs inseridos dinamicamente
+      try {
+        var mo = new MutationObserver(function(muts){
+          muts.forEach(function(m){
+            m.addedNodes && m.addedNodes.forEach(function(n){
+              if (n && n.nodeType === 1) {
+                if (n.matches && n.matches('input[type="tel"]')) { bindMask(n); }
+                var inner = n.querySelectorAll ? n.querySelectorAll('input[type="tel"]') : [];
+                for (var i=0; i<inner.length; i++) { bindMask(inner[i]); }
+              }
+            });
+          });
+        });
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+      } catch(e){}
+    })();
+  </script>
+</body>
+</html>
