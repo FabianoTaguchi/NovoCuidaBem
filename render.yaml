@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: cuidabem
+    name: novocuidabem
     env: python
     plan: starter
     autoDeploy: true
