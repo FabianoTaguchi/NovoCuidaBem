@@ -10,6 +10,8 @@ env/
 
 # Local database (usado em desenvolvimento)
 cuidabem.db
+data/*
+!data/.gitkeep
 
 # Fotos enviadas pelos usuários
 static/uploads/

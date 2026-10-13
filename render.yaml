@@ -9,11 +9,11 @@ services:
     disk:
       name: db
       sizeGB: 1
-      mountPath: /var/data
+      mountPath: /opt/render/project/src/data
     envVars:
       - key: SECRET_KEY
         generateValue: true
       - key: DB_PATH
-        value: /var/data/cuidabem.db
+        value: /opt/render/project/src/data/cuidabem.db
       - key: AI_ENABLED
         value: "false"

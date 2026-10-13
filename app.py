@@ -7,8 +7,8 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ImageOps, ExifTags
 
-# Permitir sobrescrever o caminho do banco via variável de ambiente (ex.: /var/data/cuidabem.db)
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "cuidabem.db"))
+# Permitir sobrescrever o caminho do banco via variável de ambiente
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "data", "cuidabem.db"))
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
