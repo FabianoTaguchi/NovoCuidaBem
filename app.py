@@ -3,8 +3,6 @@ import re
 import io
 import shutil
 import sqlite3
-import base64
-import requests
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -21,7 +19,6 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "static", "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 AI_ENABLED = os.getenv("AI_ENABLED", "true").lower() in ("1", "true", "yes", "on")
-OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "").strip()
 ACTIVITY_CATEGORIES = [
     ("caminhada", "Caminhada"),
     ("natacao", "Natação"),
@@ -92,36 +89,6 @@ def get_ocr_reader():
         import easyocr
         _ocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     return _ocr_reader
-
-
-def ocr_space_recognize(image_bytes):
-    """Envia a imagem para a API OCR.space e retorna o texto reconhecido."""
-    if not OCR_SPACE_API_KEY:
-        return None
-    try:
-        img_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        response = requests.post(
-            "https://api.ocr.space/parse/image",
-            data={
-                "apikey": OCR_SPACE_API_KEY,
-                "base64Image": f"data:image/jpeg;base64,{img_b64}",
-                "language": "eng",
-                "isOverlayRequired": "false",
-                "scale": "true",
-                "OCREngine": "2",
-            },
-            timeout=30,
-        )
-        result = response.json()
-        if result.get("IsErroredOnProcessing"):
-            return None
-        parsed = result.get("ParsedResults", [])
-        if not parsed:
-            return None
-        text = parsed[0].get("ParsedText", "")
-        return text
-    except Exception:
-        return None
 
 
 # Modelo de classificação de imagens (MobileNetV3 treinado no ImageNet)
@@ -1215,7 +1182,7 @@ def analyze_photo():
     if "user_id" not in session and not session.get("is_admin"):
         return jsonify({"error": "Faça login para acessar."}), 401
 
-    if not OCR_SPACE_API_KEY and not AI_ENABLED:
+    if not AI_ENABLED:
         return jsonify({"error": "O reconhecimento automático está desativado neste ambiente. Digite os dados manualmente."}), 403
 
     file = request.files.get("photo")
@@ -1255,50 +1222,38 @@ def analyze_photo():
     # --- OCR para ler o número da glicemia ---
     level = None
     ocr_debug = []
+    try:
+        import numpy as np
+        reader = get_ocr_reader()
+        img_array = np.array(img)
+        results = reader.readtext(
+            img_array,
+            allowlist="0123456789",
+            detail=1,
+        )
 
-    # Método 1: OCR.space API (funciona no Render free)
-    if OCR_SPACE_API_KEY:
-        text = ocr_space_recognize(file_bytes)
-        if text:
-            ocr_debug.append({"source": "ocr_space", "text": text})
-            numbers = re.findall(r"\d+", text)
-            candidates = [int(n) for n in numbers if 20 <= int(n) <= 600]
-            if candidates:
-                level = min(candidates, key=lambda x: abs(x - 100))
-    # Método 2: EasyOCR local (requer AI_ENABLED e mais memória)
-    elif AI_ENABLED:
-        try:
-            import numpy as np
-            reader = get_ocr_reader()
-            img_array = np.array(img)
-            results = reader.readtext(
-                img_array,
-                allowlist="0123456789",
-                detail=1,
-            )
+        candidates = []
+        for bbox, text, conf in results:
+            digits = re.sub(r"\D", "", text)
+            if not digits:
+                continue
+            ocr_debug.append({"text": text, "digits": digits, "confidence": round(float(conf), 3)})
+            try:
+                val = int(digits)
+            except Exception:
+                continue
+            if 20 <= val <= 600:
+                candidates.append((val, float(conf)))
 
-            candidates = []
-            for bbox, text, conf in results:
-                digits = re.sub(r"\D", "", text)
-                if not digits:
-                    continue
-                ocr_debug.append({"text": text, "digits": digits, "confidence": round(float(conf), 3)})
-                try:
-                    val = int(digits)
-                except Exception:
-                    continue
-                if 20 <= val <= 600:
-                    candidates.append((val, float(conf)))
-
-            if candidates:
-                candidates.sort(key=lambda x: x[1], reverse=True)
-                level = candidates[0][0]
-        except Exception as e:
-            return jsonify({
-                "error": f"Falha no reconhecimento: {e}",
-                "date": date_str,
-                "time": time_str,
-            }), 500
+        if candidates:
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            level = candidates[0][0]
+    except Exception as e:
+        return jsonify({
+            "error": f"Falha no reconhecimento: {e}",
+            "date": date_str,
+            "time": time_str,
+        }), 500
 
     return jsonify({
         "date": date_str,
